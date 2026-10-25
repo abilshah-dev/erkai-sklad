@@ -10,8 +10,7 @@ import os
 import time
 from urllib.parse import urlencode
 
-os.environ.update(BOT_TOKEN="123:TEST", SUPABASE_URL="https://x.supabase.co",
-                  SUPABASE_SERVICE_KEY="eyJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.x",
+os.environ.update(BOT_TOKEN="123:TEST", DATABASE_URL="postgresql://unused",
                   WEBAPP_URL="https://sklad.erkai.kg/t", ENV_FILE="/nonexistent")
 
 from aiohttp.test_utils import TestClient, TestServer  # noqa: E402
@@ -69,16 +68,18 @@ async def fake_catalog():
     return [{"id": "p1", "name": "Цемент", "unit": "меш.", "price": 420, "stock": 10, "group_name": "Цемент"}]
 
 
-db.user_by_tg = fake_user_by_tg
-db.create_request = fake_create_request
-db.confirm_request = fake_confirm
-db.setting = fake_setting
-db.catalog = fake_catalog
-notify.new_request = fake_notify_new
-notify.confirmed = fake_notify_confirmed
+def patch():
+    db.user_by_tg = fake_user_by_tg
+    db.create_request = fake_create_request
+    db.confirm_request = fake_confirm
+    db.setting = fake_setting
+    db.catalog = fake_catalog
+    notify.new_request = fake_notify_new
+    notify.confirmed = fake_notify_confirmed
 
 
 async def main():
+    patch()
     # Подпись Telegram
     assert auth.validate_init_data(init_data(3), "123:TEST")["id"] == 3
     assert auth.validate_init_data(init_data(3), "999:OTHER") is None, "чужой токен должен отклоняться"
@@ -131,4 +132,5 @@ async def main():
     print("Все проверки пройдены")
 
 
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())

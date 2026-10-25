@@ -8,9 +8,9 @@ from dotenv import load_dotenv
 load_dotenv(os.environ.get("ENV_FILE", ".env"))
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]                    # токен бота клиента от @BotFather
-SUPABASE_URL = os.environ["SUPABASE_URL"]              # https://xxxx.supabase.co
-SUPABASE_KEY = os.environ["SUPABASE_SERVICE_KEY"]      # service_role ключ (формат eyJ...)
-# Адрес Mini App, обязательно https и со слешем на конце: https://sklad.erkai.kg/acme/
+# База клиента на нашем сервере: postgresql://пользователь:пароль@127.0.0.1:5432/база
+DATABASE_URL = os.environ["DATABASE_URL"]
+# Адрес Mini App, обязательно https и со слешем на конце: https://sklad.erkai.kg/client1/
 WEBAPP_URL = os.environ["WEBAPP_URL"].rstrip("/") + "/"
 OWNER_TG_ID = int(os.environ.get("OWNER_TG_ID", "0"))  # Telegram ID владельца — регистрируется сам
 COMPANY_NAME = os.environ.get("COMPANY_NAME", "Склад")

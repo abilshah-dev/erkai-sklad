@@ -1,11 +1,10 @@
 -- =====================================================================
--- ERKai Склад — схема базы данных (один проект Supabase = один клиент)
--- Запуск: Supabase → SQL Editor → вставить весь файл → Run.
+-- ERKai Склад — схема базы данных PostgreSQL (одна база = один клиент)
+-- Применяется скриптом deploy/new_client.sh.
 -- Повторный запуск на той же базе не предусмотрен: для обновлений
 -- будут отдельные файлы миграций.
 -- =====================================================================
 
-create extension if not exists pgcrypto;
 
 -- ---------- Настройки компании ----------
 -- Значения хранятся как JSON: число, true/false или текст.
@@ -386,31 +385,6 @@ select m.id, m.ts, m.doc_type, m.doc_no, p.name as product, p.unit, m.qty,
   left join users u on u.id = m.user_id;
 
 -- =====================================================================
--- Безопасность: доступ к данным только с сервера бота (service_role).
--- Публичный ключ anon не видит ни таблиц, ни функций.
+-- Доступ: база слушает только localhost, у каждого клиента свой пользователь
+-- с паролем (deploy/new_client.sh). Наружу база не открыта.
 -- =====================================================================
-do $$
-declare t text;
-begin
-  for t in select tablename from pg_tables where schemaname = 'public' loop
-    execute format('alter table public.%I enable row level security', t);
-  end loop;
-end $$;
-
-do $$
-begin
-  if exists (select 1 from pg_roles where rolname = 'anon') then
-    revoke all on all tables    in schema public from anon, authenticated;
-    revoke all on all sequences in schema public from anon, authenticated;
-    revoke execute on all functions in schema public from anon, authenticated;
-  end if;
-end $$;
-revoke execute on all functions in schema public from public;
-do $$
-begin
-  if exists (select 1 from pg_roles where rolname = 'service_role') then
-    grant all on all tables    in schema public to service_role;
-    grant all on all sequences in schema public to service_role;
-    grant execute on all functions in schema public to service_role;
-  end if;
-end $$;
