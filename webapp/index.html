@@ -51,7 +51,7 @@ h2{font-size:18px;margin:2px 0 0;font-weight:600}
 .btn:disabled{opacity:.45}
 .bar{position:fixed;left:0;right:0;bottom:0;padding:10px 16px calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(to top,var(--bg) 75%,transparent);display:flex;flex-direction:column;gap:6px;max-width:560px;margin:0 auto}
 .pill{display:inline-flex;font-size:12px;font-weight:600;border-radius:999px;padding:2px 9px;white-space:nowrap}
-.p-ok{background:var(--ok-soft);color:var(--ok)} .p-acc{background:var(--accent-soft);color:var(--accent-text)} .p-mut{background:var(--surface2);color:var(--muted)}
+.p-ok{background:var(--ok-soft);color:var(--ok)} .p-warn{background:var(--warn-soft);color:var(--warn)} .p-bad{background:var(--bad-soft);color:var(--bad)} .p-acc{background:var(--accent-soft);color:var(--accent-text)} .p-mut{background:var(--surface2);color:var(--muted)}
 .tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .tile{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px}
 .tile b{display:block;font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
@@ -99,10 +99,10 @@ function haptic(type) { try { tg && tg.HapticFeedback.notificationOccurred(type)
 // ---------- Состояние ----------
 const S = { me: null, view: null, catalog: [], cart: {}, cat: 'Все', q: '', data: null, busy: false };
 const TABS = {
-  agent: [['order', '🛒 Заявка'], ['car', '🚚 Машина'], ['clients', '👥 Клиенты']],
+  agent: [['order', '🛒 Заявка'], ['sale', '🧾 Продажа'], ['car', '🚚 Машина'], ['clients', '👥 Клиенты']],
   storekeeper: [['requests', '📥 Заявки'], ['stock', '📦 Остатки'], ['journal', '📒 Журнал']],
-  accountant: [['clients', '👥 Клиенты'], ['agents', '🚚 Агенты'], ['requests', '📥 Заявки'], ['stock', '📦 Остатки'], ['journal', '📒 Журнал']],
-  owner: [['agents', '🚚 Агенты'], ['stock', '📦 Остатки'], ['clients', '👥 Клиенты'], ['requests', '📥 Заявки'], ['journal', '📒 Журнал']]
+  accountant: [['cash', '💵 Касса'], ['summary', '📊 Сводка'], ['clients', '👥 Клиенты'], ['agents', '🚚 Агенты'], ['requests', '📥 Заявки'], ['stock', '📦 Остатки'], ['journal', '📒 Журнал']],
+  owner: [['summary', '📊 Сводка'], ['approvals', '🏷 Скидки'], ['cash', '💵 Касса'], ['clients', '👥 Клиенты'], ['agents', '🚚 Агенты'], ['stock', '📦 Остатки'], ['requests', '📥 Заявки'], ['journal', '📒 Журнал'], ['settings', '⚙️ Настройки']]
 };
 const main = document.getElementById('main'), bar = document.getElementById('bar');
 
@@ -124,8 +124,36 @@ const LOAD = {
   confirm: async () => { S.data = await api('requests/' + params.get('id')); S.edit = {}; },
   stock: async () => { S.catalog = await api('catalog'); },
   agents: async () => { S.data = await api('agents'); },
-  journal: async () => { S.data = await api('journal'); }
+  journal: async () => { S.data = await api('journal'); },
+  sale: async () => {
+    const [catalog, car, clients] = await Promise.all([api('catalog'), api('car'), api('clients')]);
+    S.catalog = catalog; S.data = { car, clients };
+    if (!S.sale) S.sale = { client: params.get('client') || '', qty: {}, pct: {}, pay: 'cash', paid: '' };
+  },
+  cash: async () => { S.data = await api('handovers'); },
+  summary: async () => { S.data = await api('summary'); },
+  approvals: async () => { S.data = await api('approvals'); },
+  settings: async () => { S.data = await api('settings'); }
 };
+const DOC = { issue: 'Выдача', return: 'Возврат', sale: 'Продажа', import_1c: 'Из 1С' };
+const PAY = { cash: 'Наличные', transfer: 'Перевод', debt: 'В долг', part: 'Частично' };
+const STOP = () => +(S.me.debt_stop_days || 30);
+function debtPill(c) {
+  if (!(+c.debt > 0)) return '<span class="pill p-ok">нет долга</span>';
+  const d = c.oldest_days;
+  const cls = d > STOP() ? 'p-bad' : d >= 15 ? 'p-warn' : 'p-mut';
+  return `<span class="pill ${cls}">${fmt(c.debt)} · ${d} дн.${d > STOP() ? ' · стоп' : ''}</span>`;
+}
+function saleCalc() {
+  let base = 0, total = 0, over = [];
+  for (const [pid, q] of Object.entries(S.sale.qty)) {
+    const p = S.catalog.find(x => x.id === pid); if (!p) continue;
+    const pct = +S.sale.pct[pid] || 0;
+    base += p.price * q; total += Math.round(p.price * q * (1 - pct / 100) * 100) / 100;
+    if (pct > +p.max_discount) over.push(p.name);
+  }
+  return { base, total, over };
+}
 
 function stepper(kind, id, v, max) {
   return `<div class="step"><button data-dec="${kind}" data-id="${id}" aria-label="Меньше">−</button><input inputmode="numeric" data-in="${kind}" data-id="${id}" value="${v}" aria-label="Количество"><button data-inc="${kind}" data-id="${id}" data-max="${max}" aria-label="Больше">+</button></div>`;
@@ -149,7 +177,10 @@ const VIEW = {
     return `<h2>Моя машина</h2>
     <div class="tiles"><div class="tile"><b>${fmt(val)}</b><span>товара на руках</span></div><div class="tile"><b>${items.length}</b><span>позиций</span></div></div>
     ${limit ? `<div class="card"><div class="row"><span class="meta">Лимит подотчёта</span><span class="meta num">${fmt(val)} из ${fmt(limit)}</span></div><div class="meter"><i style="width:${Math.min(100, val / limit * 100)}%"></i></div></div>` : ''}
-    ${S.data.pending.map(p => `<div class="note">${p.kind === 'issue' ? 'Заявка' : 'Возврат'} ${esc(p.no)} ждёт склада.</div>`).join('')}
+    <div class="card"><div class="row"><div class="grow"><div class="name">Наличные на руках</div><div class="meta">долги моих клиентов: ${fmt(S.data.clients_debt)}</div></div><b class="num">${fmt(S.data.cash_on_hand)}</b></div>
+      ${+S.data.pending_handover ? `<div class="note">Сдано ${fmt(S.data.pending_handover)} — ждёт подтверждения бухгалтера.</div>` : ''}
+      ${+S.data.cash_on_hand ? `<button class="btn sec" data-act="handover">Сдать ${fmt(S.data.cash_on_hand)} в кассу</button>` : ''}</div>
+    ${S.data.pending.map(p => `<div class="note">${p.kind === 'issue' ? 'Заявка на выдачу' : 'Возврат'} ${esc(p.no)} ждёт склада.</div>`).join('')}
     <p class="sub" style="margin:0">Чтобы вернуть часть товара, укажите количество и нажмите «Вернуть».</p>
     <div class="list">${items.map(r => { const v = S.ret[r.product_id] || 0; return `<div class="item"><div class="grow"><div class="name">${esc(r.product)}</div><div class="meta">в машине: <b class="num">${r.qty} ${esc(r.unit)}</b> · ${fmt(r.value)}</div></div>${v ? stepper('ret', r.product_id, v, r.qty) : `<button class="add" data-retadd="${r.product_id}">Вернуть</button>`}</div>`; }).join('') || '<div class="empty">В машине пусто</div>'}</div>`;
   },
@@ -168,7 +199,8 @@ const VIEW = {
       <div class="two"><div class="field"><label for="cp">Где</label><input id="cp" placeholder="рынок, ряд"></div><div class="field"><label for="ct">Телефон</label><input id="ct" inputmode="tel" placeholder="+996"></div></div>
       ${staff ? `<div class="field"><label for="ca">Агент</label><select id="ca">${active.map(a => `<option value="${a.id}">${esc(a.full_name)}</option>`).join('')}</select></div>` : ''}
       <button class="btn sec" data-act="addClient">Добавить клиента</button></div>
-    <div class="list">${list.map(c => `<div class="item"><div class="grow"><div class="name">${esc(c.name)}</div><div class="meta">${esc([c.place, c.phone].filter(Boolean).join(' · '))}</div>${staff ? `<div class="meta">агент: ${esc(aName(c.agent_id))}</div>` : ''}</div></div>`).join('') || '<div class="empty">Клиентов пока нет</div>'}</div>`;
+    <div class="list">${list.map(c => `<div class="item" style="flex-wrap:wrap"><div class="grow"><div class="name">${esc(c.name)}</div><div class="meta">${esc([c.place, c.phone].filter(Boolean).join(' · '))}</div>${staff ? `<div class="meta">агент: ${esc(aName(c.agent_id))}</div>` : ''}</div><div style="display:flex;flex-direction:column;align-items:end;gap:6px">${debtPill(c)}${+c.debt > 0 && S.payFor !== c.id ? `<button class="add" data-payfor="${c.id}">Принять оплату</button>` : ''}${!staff ? `<button class="add" data-sellto="${c.id}">Продать</button>` : ''}</div>
+      ${S.payFor === c.id ? `<div style="flex-basis:100%;display:flex;gap:8px;margin-top:8px"><input id="payAmt" inputmode="numeric" placeholder="Сумма" style="flex:1;min-width:0;border:1px solid var(--line);background:var(--surface2);border-radius:10px;padding:9px 10px"><select id="payMethod" style="border:1px solid var(--line);background:var(--surface2);border-radius:10px;padding:9px"><option value="cash">наличные</option><option value="transfer">перевод</option></select><button class="btn" style="width:auto" data-act="pay" data-client="${c.id}">OK</button></div>` : ''}</div>`).join('') || '<div class="empty">Клиентов пока нет</div>'}</div>`;
   },
   requests() {
     return `<h2>Заявки к обработке</h2>${S.data.map(r => `<div class="card"><div class="row"><div class="grow"><div class="name">${r.kind === 'issue' ? 'Выдача' : 'Возврат'} ${esc(r.no)}</div><div class="meta">${esc(r.agent_name)} · ${r.request_items.length} поз.</div></div><span class="pill ${r.kind === 'issue' ? 'p-acc' : 'p-mut'}">${r.kind === 'issue' ? 'выдать' : 'принять'}</span></div><button class="btn sec" data-open="${r.id}">Открыть</button></div>`).join('') || '<div class="empty">Новых заявок нет</div>'}`;
@@ -187,9 +219,64 @@ const VIEW = {
     return `<h2>Товар у агентов</h2><div class="tiles"><div class="tile"><b>${fmt(total)}</b><span>всего на руках</span></div><div class="tile"><b>${S.data.filter(a => a.active).length}</b><span>активных агентов</span></div></div>
     <div class="list">${S.data.map(a => `<div class="item"><div class="grow"><div class="name">${esc(a.full_name)}</div>${a.active ? '' : '<span class="pill p-mut">отключён</span>'}</div><b class="num">${fmt(a.car_value)}</b></div>`).join('') || '<div class="empty">Агентов нет</div>'}</div>`;
   },
+  sale() {
+    const { car, clients } = S.data, sale = S.sale;
+    if (S.lastSale) {
+      const r = S.lastSale;
+      return `<h2>${r.status === 'done' ? 'Продажа №' + r.no + ' оформлена' : 'Продажа №' + r.no + ' ждёт владельца'}</h2>
+      <div class="card"><div class="row"><span>К оплате</span><b class="num">${fmt(r.total)}</b></div><div class="row"><span class="meta">Оплачено сейчас</span><span class="num">${fmt(r.paid)}</span></div>${r.total - r.paid > 0 ? `<div class="row"><span class="meta">В долг</span><span class="num">${fmt(r.total - r.paid)}</span></div>` : ''}</div>
+      <div class="note">${r.status === 'done' ? 'PDF-накладная пришла в чат бота — перешлите её клиенту.' : 'Скидка выше лимита: владелец получил запрос. Когда одобрит — накладная придёт в чат.'}</div>
+      <button class="btn" data-act="newSale">Новая продажа</button>`;
+    }
+    const c = clients.find(x => x.id === sale.client);
+    const stop = c && c.oldest_days > STOP() && +c.debt > 0;
+    const items = car.items;
+    const calc = saleCalc();
+    return `<h2>Продажа клиенту</h2><p class="sub">Товар списывается из вашей машины.</p>
+    <div class="field"><label for="cl">Клиент</label><select id="cl" data-sale="client"><option value="">Выберите клиента</option>${clients.map(x => `<option value="${x.id}" ${x.id === sale.client ? 'selected' : ''}>${esc(x.name)}${+x.debt > 0 ? ' · долг ' + fmt(x.debt) : ''}</option>`).join('')}</select></div>
+    ${clients.length ? '' : '<div class="note">Сначала добавьте клиента во вкладке «Клиенты».</div>'}
+    ${c && +c.debt > 0 ? `<div class="note ${stop ? 'bad' : ''}">Долг клиента ${fmt(c.debt)}, самый старый — ${c.oldest_days} дн.${stop ? ' Продажа в долг заблокирована — только оплата сразу.' : ''}</div>` : ''}
+    <div class="list">${items.map(r => { const p = S.catalog.find(x => x.id === r.product_id) || {}; const q = sale.qty[r.product_id] || 0; return `<div class="item" style="flex-wrap:wrap"><div class="grow"><div class="name">${esc(r.product)}</div><div class="meta">в машине: <span class="num">${r.qty} ${esc(r.unit)}</span> · ${fmt(r.price)}</div></div>${q ? stepper('sale', r.product_id, q, r.qty) : `<button class="add" data-saleadd="${r.product_id}">+ Добавить</button>`}
+      ${q ? `<div style="flex-basis:100%;display:flex;align-items:center;gap:8px;margin-top:6px"><span class="meta">скидка, %</span><input data-pct="${r.product_id}" inputmode="decimal" value="${sale.pct[r.product_id] || ''}" placeholder="0" style="width:64px;border:1px solid var(--line);background:var(--surface2);border-radius:8px;padding:6px;text-align:center"><span class="meta">лимит ${+p.max_discount || 0}%</span></div>` : ''}</div>`; }).join('') || '<div class="empty">Машина пуста — сначала получите товар на складе.</div>'}</div>
+    ${Object.keys(sale.qty).length ? `<div class="card"><div class="row"><span class="meta">По прайсу</span><span class="num">${fmt(calc.base)}</span></div><div class="row"><b>К оплате</b><b class="num">${fmt(calc.total)}</b></div>
+      <div class="chips" style="flex-wrap:wrap">${Object.entries(PAY).map(([k, l]) => `<button data-pay="${k}" aria-pressed="${sale.pay === k}" ${stop && (k === 'debt' || k === 'part') ? 'disabled' : ''}>${l}</button>`).join('')}</div>
+      ${sale.pay === 'part' ? `<div class="field"><label for="paid">Оплачено сейчас, сом</label><input id="paid" data-sale="paid" inputmode="numeric" value="${esc(sale.paid)}"></div>` : ''}
+      ${calc.over.length ? `<div class="note">Скидка выше лимита: ${esc(calc.over.join(', '))}. Продажа уйдёт владельцу на согласование.</div>` : ''}</div>` : ''}`;
+  },
+  cash() {
+    const { pending, agents } = S.data;
+    return `<h2>Касса</h2><p class="sub">Подтвердите, когда агент передал наличные.</p>
+    ${pending.map(h => `<div class="card"><div class="row"><div class="grow"><div class="name">${esc(h.agent_name)}</div><div class="meta">сдача №${h.no}</div></div><b class="num">${fmt(h.amount)}</b></div><div class="two"><button class="btn" data-act="hoOk" data-id="${h.id}">Деньги получены</button><button class="btn sec" data-act="hoNo" data-id="${h.id}">Не получены</button></div></div>`).join('') || '<div class="empty">Нет сдачи денег на подтверждение</div>'}
+    <div class="card"><div class="name">Наличные на руках у агентов</div><table>${agents.filter(a => a.active || +a.cash_on_hand).map(a => `<tr><td>${esc(a.full_name)}</td><td class="num" style="text-align:right">${fmt(a.cash_on_hand)}</td></tr>`).join('') || '<tr><td class="meta">Агентов нет</td></tr>'}</table></div>`;
+  },
+  summary() {
+    const s = S.data;
+    return `<h2>Сводка за сегодня</h2>
+    <div class="tiles"><div class="tile"><b>${fmt(s.sales_today)}</b><span>продажи · ${s.sales_count} накл.</span></div><div class="tile"><b>${fmt(s.discount_today)}</b><span>отдано скидками</span></div>
+    <div class="tile"><b>${fmt(s.debts_total)}</b><span>долги клиентов</span></div><div class="tile"><b>${fmt(s.debts_overdue)}</b><span>из них просрочено</span></div>
+    <div class="tile"><b>${fmt(s.goods_at_agents)}</b><span>товар у агентов</span></div><div class="tile"><b>${fmt(s.cash_at_agents)}</b><span>деньги у агентов</span></div></div>
+    ${s.pending_approvals && S.me.role === 'owner' ? `<button class="btn" data-go="approvals">Ждут согласования: ${s.pending_approvals}</button>` : ''}
+    <div class="card"><div class="name">По агентам</div><div style="overflow-x:auto"><table><tr><td class="meta">Агент</td><td class="meta" style="text-align:right">Продажи</td><td class="meta" style="text-align:right">Машина</td><td class="meta" style="text-align:right">Деньги</td><td class="meta" style="text-align:right">Долги</td></tr>
+    ${s.agents.map(a => `<tr><td>${esc(a.name)}</td><td class="num" style="text-align:right">${fmt(a.sales_today)}</td><td class="num" style="text-align:right">${fmt(a.car)}</td><td class="num" style="text-align:right">${fmt(a.cash || 0)}</td><td class="num" style="text-align:right">${fmt(a.debts)}</td></tr>`).join('')}</table></div></div>`;
+  },
+  approvals() {
+    return `<h2>Запросы на скидку</h2>${S.data.map(s => `<div class="card"><div class="row"><div class="grow"><div class="name">Продажа №${s.no} · ${esc(s.client_name)}</div><div class="meta">агент ${esc(s.agent_name)} · ${PAY[s.pay_type]}</div></div></div>
+      ${s.items.map(it => `<div class="row"><span class="grow">${esc(it.name)} × ${it.qty}</span><span class="pill ${+it.discount_pct > +it.max_discount ? 'p-bad' : 'p-mut'}">${+it.discount_pct}% / лимит ${+it.max_discount}%</span></div>`).join('')}
+      <div class="row"><span class="meta">По прайсу ${fmt(s.base_total)}</span><b class="num">${fmt(s.total)}</b></div>
+      <div class="two"><button class="btn" data-act="saleOk" data-id="${s.id}">Одобрить</button><button class="btn sec" data-act="saleNo" data-id="${s.id}">Отклонить</button></div></div>`).join('') || '<div class="empty">Запросов нет</div>'}`;
+  },
+  settings() {
+    const st = S.data.settings, g = S.data.groups;
+    const f = (k, l, hint) => `<div class="field"><label for="st_${k}">${l}</label><input id="st_${k}" inputmode="numeric" value="${+st[k] || 0}"><span class="meta">${hint}</span></div>`;
+    return `<h2>Настройки</h2>
+    <div class="card">${f('agent_stock_limit', 'Лимит товара у агента, сом', '0 — без лимита')}${f('client_debt_limit', 'Лимит долга на клиента, сом', '0 — без лимита')}${f('debt_stop_days', 'Стоп-долг через, дней', 'старше — продажа только с оплатой сразу')}</div>
+    <div class="card"><div class="name">Допустимая скидка агента по группам, %</div><p class="meta" style="margin:0">Выше лимита — продажа уходит вам на согласование.</p>
+    ${g.map(x => `<div class="row"><span class="grow">${esc(x.name)}</span><input data-group="${x.id}" inputmode="decimal" value="${+x.max_discount}" style="width:72px;border:1px solid var(--line);background:var(--surface2);border-radius:8px;padding:7px;text-align:center"></div>`).join('') || '<p class="meta">Групп нет — загрузите товары из 1С.</p>'}</div>
+    <button class="btn" data-act="saveSettings">Сохранить</button>`;
+  },
   journal() {
     return `<h2>Журнал движений</h2><p class="sub">Каждое перемещение товара — с временем и автором.</p>
-    <div class="card"><table>${S.data.map(m => `<tr><td class="meta num">${new Date(m.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${esc(m.doc_no)} · ${esc(m.product)} <b class="num">${m.qty} ${esc(m.unit)}</b><div class="meta">${esc(m.from_name || '1С')} → ${esc(m.to_name || 'списание')}${m.user_name ? ' · ' + esc(m.user_name) : ''}</div></td></tr>`).join('') || '<tr><td class="empty">Движений пока нет</td></tr>'}</table></div>`;
+    <div class="card"><table>${S.data.map(m => `<tr><td class="meta num">${new Date(m.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${esc(DOC[m.doc_type] || m.doc_type)} ${esc(m.doc_no)} · ${esc(m.product)} <b class="num">${m.qty} ${esc(m.unit)}</b><div class="meta">${esc(m.from_name || '1С')} → ${esc(m.to_name || 'списание')}${m.user_name ? ' · ' + esc(m.user_name) : ''}</div></td></tr>`).join('') || '<tr><td class="empty">Движений пока нет</td></tr>'}</table></div>`;
   }
 };
 
@@ -200,6 +287,12 @@ const BAR = {
     return `<div class="bar">${over ? `<div class="note bad">Лимит подотчёта ${fmt(limit)}: в машине уже ${fmt(carValue())}.</div>` : ''}<button class="btn" data-act="sendOrder" ${over || S.busy ? 'disabled' : ''}>Отправить на склад · ${n} поз. · ${fmt(cartSum())}</button></div>`;
   },
   car() { const n = Object.keys(S.ret || {}).length; return n ? `<div class="bar"><button class="btn" data-act="sendReturn" ${S.busy ? 'disabled' : ''}>Вернуть на склад · ${n} поз.</button></div>` : ''; },
+  sale() {
+    if (S.lastSale || !Object.keys(S.sale.qty).length) return '';
+    const c = S.data.clients.find(x => x.id === S.sale.client), calc = saleCalc();
+    const label = !c ? 'Выберите клиента' : calc.over.length ? 'Отправить на согласование' : 'Оформить продажу · ' + fmt(calc.total);
+    return `<div class="bar"><button class="btn" data-act="sell" ${!c || S.busy ? 'disabled' : ''}>${label}</button></div>`;
+  },
   confirm() { return S.data.status === 'new' ? `<div class="bar"><button class="btn" data-act="confirm" ${S.busy ? 'disabled' : ''}>${S.data.kind === 'issue' ? 'Выдал' : 'Принял'} — подтвердить</button></div>` : ''; }
 };
 
@@ -227,6 +320,32 @@ const ACT = {
     await api('clients', { name: v('cn'), place: v('cp'), phone: v('ct'), agent_id: v('ca') || undefined });
     toast('Клиент добавлен'); await go('clients');
   },
+  async sell() {
+    const items = Object.entries(S.sale.qty).map(([product_id, qty]) => ({ product_id, qty, discount_pct: +S.sale.pct[product_id] || 0 }));
+    const res = await api('sales', { client_id: S.sale.client, items, pay: S.sale.pay, paid: +S.sale.paid || 0 });
+    haptic('success'); S.lastSale = res; S.sale = null; await go('sale');
+  },
+  async newSale() { S.lastSale = null; S.sale = null; await go('sale'); },
+  async pay(t) {
+    const amount = +(document.getElementById('payAmt').value || 0), method = document.getElementById('payMethod').value;
+    if (amount <= 0) { toast('Введите сумму'); return; }
+    const res = await api('payments', { client_id: t.dataset.client, amount, method });
+    haptic('success'); toast(`Принято ${fmt(res.paid)}. Остаток долга ${fmt(res.debt_left)}`); S.payFor = null; await go('clients');
+  },
+  async handover() {
+    const res = await api('handovers', {});
+    haptic('success'); toast(`Сдача №${res.no}: ${fmt(res.amount)}. Ждём бухгалтера`); await go('car');
+  },
+  async hoOk(t) { await api(`handovers/${t.dataset.id}/decide`, { ok: true }); toast('Приём денег подтверждён'); await go('cash'); },
+  async hoNo(t) { await api(`handovers/${t.dataset.id}/decide`, { ok: false }); toast('Отмечено: не получено'); await go('cash'); },
+  async saleOk(t) { const r = await api(`sales/${t.dataset.id}/decide`, { approve: true }); toast(`Продажа №${r.no} одобрена`); await go('approvals'); },
+  async saleNo(t) { const r = await api(`sales/${t.dataset.id}/decide`, { approve: false }); toast(`Продажа №${r.no} отклонена`); await go('approvals'); },
+  async saveSettings() {
+    const settings = {}, groups = {};
+    for (const k of ['agent_stock_limit', 'client_debt_limit', 'debt_stop_days']) settings[k] = +(document.getElementById('st_' + k).value || 0);
+    document.querySelectorAll('[data-group]').forEach(i => groups[i.dataset.group] = +String(i.value).replace(',', '.') || 0);
+    S.data = await api('settings', { settings, groups }); S.me = await api('me'); haptic('success'); toast('Сохранено'); render();
+  },
   async transfer() {
     const from = document.getElementById('xf').value, to = document.getElementById('xt').value, block = document.getElementById('xb').checked;
     if (from === to) { toast('Выберите разных агентов'); return; }
@@ -243,21 +362,29 @@ document.addEventListener('click', async e => {
   if (d.cat) { S.cat = d.cat; return render(); }
   if (d.add) { S.cart[d.add] = 1; return render(); }
   if (d.retadd) { S.ret[d.retadd] = 1; return render(); }
+  if (d.saleadd) { S.sale.qty[d.saleadd] = 1; return render(); }
+  if (d.pay) { S.sale.pay = d.pay; return render(); }
+  if (d.payfor) { S.payFor = d.payfor; render(); const i = document.getElementById('payAmt'); if (i) i.focus(); return; }
+  if (d.sellto) { S.sale = { client: d.sellto, qty: {}, pct: {}, pay: 'cash', paid: '' }; S.lastSale = null; return go('sale'); }
   if (d.inc || d.dec) {
-    const store = { cart: S.cart, ret: S.ret, giv: S.edit }[d.inc || d.dec];
+    const store = { cart: S.cart, ret: S.ret, giv: S.edit, sale: S.sale && S.sale.qty }[d.inc || d.dec];
     const cur = store[d.id] ?? (S.data.request_items || []).find(i => i.id === d.id)?.qty_requested ?? 0;
     let v = d.inc ? Math.min(+d.max, cur + 1) : cur - 1;
     if (v <= 0 && d.dec !== 'giv') delete store[d.id]; else store[d.id] = Math.max(0, v);
     return render();
   }
   if (d.act && ACT[d.act]) {
-    S.busy = true; render();
-    try { await ACT[d.act](); } catch (err) { haptic('error'); toast(err.message); } finally { S.busy = false; if (BAR[S.view]) bar.innerHTML = BAR[S.view](); }
+    S.busy = true; t.disabled = true;   // не перерисовываем — иначе сотрутся введённые значения
+    try { await ACT[d.act](t); } catch (err) { haptic('error'); toast(err.message); } finally { S.busy = false; if (t.isConnected) t.disabled = false; if (BAR[S.view]) bar.innerHTML = BAR[S.view](); }
   }
 });
 document.addEventListener('change', e => {
-  const t = e.target, k = t.dataset.in; if (!k) return;
-  const store = { cart: S.cart, ret: S.ret, giv: S.edit }[k];
+  const t = e.target;
+  if (t.dataset.pct) { S.sale.pct[t.dataset.pct] = Math.min(100, Math.max(0, +String(t.value).replace(',', '.') || 0)); return render(); }
+  if (t.dataset.sale === 'client') { S.sale.client = t.value; S.sale.pay = 'cash'; return render(); }
+  if (t.dataset.sale === 'paid') { S.sale.paid = t.value; return; }
+  const k = t.dataset.in; if (!k) return;
+  const store = { cart: S.cart, ret: S.ret, giv: S.edit, sale: S.sale && S.sale.qty }[k];
   const n = Math.max(0, Math.round(+t.value || 0));
   if (n <= 0 && k !== 'giv') delete store[t.dataset.id]; else store[t.dataset.id] = n;
   render();

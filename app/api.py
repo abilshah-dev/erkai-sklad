@@ -53,8 +53,9 @@ async def index(request):
 async def me(request):
     u = request["user"]
     limit = await db.setting("agent_stock_limit", 0)
+    stop = await db.setting("debt_stop_days", 30)
     return web.json_response({"id": u["id"], "name": u["full_name"], "role": u["role"],
-                              "company": config.COMPANY_NAME, "agent_limit": limit})
+                              "company": config.COMPANY_NAME, "agent_limit": limit, "debt_stop_days": stop})
 
 
 @routes.get("/api/catalog")
@@ -72,7 +73,11 @@ async def car(request):
         need(request, "agent")
     rows = await db.car(agent_id)
     pending = await db.open_requests(agent_id)
-    return web.json_response({"items": rows, "pending": [{"no": r["no"], "kind": r["kind"]} for r in pending]})
+    cash = await db.agent_cash(agent_id) or {}
+    debts = sum(float(c["debt"]) for c in await db.clients(agent_id))
+    return web.json_response({"items": rows, "pending": [{"no": r["no"], "kind": r["kind"]} for r in pending],
+                              "cash_on_hand": cash.get("cash_on_hand", 0),
+                              "pending_handover": cash.get("pending_handover", 0), "clients_debt": debts})
 
 
 @routes.post("/api/requests")
@@ -167,6 +172,104 @@ async def agents(request):
 async def journal(request):
     need(request, "storekeeper", *STAFF)
     return web.json_response(await db.journal(int(request.query.get("limit", 100))))
+
+
+# ---------- Этап 2: продажи, оплаты, деньги, сводка, настройки ----------
+
+@routes.post("/api/sales")
+async def create_sale(request):
+    need(request, "agent")
+    body = await request.json()
+    merged: dict[str, dict] = {}  # одна строка на товар
+    for i in body.get("items", []):
+        qty = int(i.get("qty", 0))
+        if qty <= 0:
+            continue
+        m = merged.setdefault(i["product_id"], {"product_id": i["product_id"], "qty": 0, "discount_pct": 0})
+        m["qty"] += qty
+        m["discount_pct"] = max(float(m["discount_pct"]), float(i.get("discount_pct") or 0))
+    if not merged:
+        return err(400, "Добавьте товары.")
+    pay = body.get("pay", "cash")
+    res = await db.create_sale(request["user"]["id"], body.get("client_id"), list(merged.values()), pay,
+                               float(body.get("paid") or 0))
+    bot = request.app["bot"]
+    if res["status"] == "done":
+        await notify.sale_done(bot, res["id"])
+    else:
+        await notify.sale_pending(bot, res["id"])
+    return web.json_response(res)
+
+
+@routes.get("/api/approvals")
+async def approvals(request):
+    need(request, "owner")
+    return web.json_response(await db.pending_sales())
+
+
+@routes.post("/api/sales/{sid}/decide")
+async def decide_sale(request):
+    need(request, "owner")
+    body = await request.json()
+    res = await db.decide_sale(request.match_info["sid"], request["user"]["id"], bool(body.get("approve")))
+    await notify.sale_decided(request.app["bot"], res, request["user"]["full_name"])
+    return web.json_response(res)
+
+
+@routes.post("/api/payments")
+async def payment(request):
+    need(request, "agent", *STAFF)
+    body = await request.json()
+    client = await db.client_by_id(body.get("client_id"))
+    if not client:
+        return err(404, "Клиент не найден.")
+    method = body.get("method", "cash")
+    res = await db.take_payment(request["user"]["id"], client["id"], float(body.get("amount") or 0), method)
+    await notify.payment_taken(request.app["bot"], request["user"], client, res, method)
+    return web.json_response(res)
+
+
+@routes.post("/api/handovers")
+async def create_handover(request):
+    need(request, "agent")
+    res = await db.create_handover(request["user"]["id"])
+    await notify.handover_new(request.app["bot"], res, request["user"]["full_name"])
+    return web.json_response(res)
+
+
+@routes.get("/api/handovers")
+async def handovers(request):
+    need(request, *STAFF)
+    return web.json_response({"pending": await db.pending_handovers(), "agents": await db.all_agent_cash()})
+
+
+@routes.post("/api/handovers/{hid}/decide")
+async def decide_handover(request):
+    need(request, *STAFF)
+    body = await request.json()
+    res = await db.decide_handover(request.match_info["hid"], request["user"]["id"], bool(body.get("ok")))
+    await notify.handover_decided(request.app["bot"], res, request["user"]["full_name"])
+    return web.json_response(res)
+
+
+@routes.get("/api/summary")
+async def summary(request):
+    need(request, *STAFF)
+    return web.json_response(await db.owner_summary())
+
+
+@routes.get("/api/settings")
+async def get_settings(request):
+    need(request, "owner")
+    return web.json_response(await db.get_settings())
+
+
+@routes.post("/api/settings")
+async def save_settings(request):
+    need(request, "owner")
+    body = await request.json()
+    await db.save_settings(body.get("settings", {}), body.get("groups", {}), request["user"]["id"])
+    return web.json_response(await db.get_settings())
 
 
 def make_app(bot: Bot) -> web.Application:

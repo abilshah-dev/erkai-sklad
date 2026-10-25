@@ -34,7 +34,15 @@ ERRORS = {
     "SAME_AGENT": "Выберите другого агента.",
     "TARGET_NOT_AGENT": "Получатель должен быть активным агентом.",
     "CANNOT_CANCEL": "Эту заявку уже нельзя отменить.",
-    "NOT_ENOUGH_STOCK": "Не хватает товара на складе.",
+    "NOT_ENOUGH_STOCK": "Не хватает товара.",
+    "NOT_YOUR_CLIENT": "Это клиент другого агента.",
+    "BAD_PAY": "Неверный способ оплаты.",
+    "BAD_QTY": "Укажите количество.",
+    "NOT_IN_CAR": "В машине нет столько товара.",
+    "DEBT_STOP": "У клиента долг старше допустимого срока — продажа в долг заблокирована. Возьмите оплату сразу.",
+    "DEBT_LIMIT": "Превышен лимит долга клиента.",
+    "NO_DEBT": "У клиента нет долга.",
+    "NO_CASH": "У вас нет наличных для сдачи.",
 }
 
 
@@ -52,10 +60,14 @@ def money(x) -> str:
 def _human(msg: str) -> str:
     for code, text in ERRORS.items():
         if code in msg:
-            if code == "LIMIT_EXCEEDED":
-                parts = msg.split(":")
-                if len(parts) >= 3:
-                    return f"Превышен лимит подотчёта {money(parts[-1])}: в машине уже {money(parts[-2])}."
+            parts = msg.split(":")
+            if code == "LIMIT_EXCEEDED" and len(parts) >= 3:
+                return f"Превышен лимит подотчёта {money(parts[-1])}: в машине уже {money(parts[-2])}."
+            if code == "DEBT_LIMIT" and len(parts) >= 3:
+                return f"Превышен лимит долга клиента {money(parts[-1])}: уже должен {money(parts[-2])}."
+            if code == "DEBT_STOP" and len(parts) >= 2:
+                return (f"Самому старому долгу клиента {parts[-1].strip()} дн. — продажа в долг заблокирована. "
+                        "Возьмите оплату сразу.")
             return text
     return "Ошибка базы данных. Попробуйте ещё раз."
 
@@ -218,9 +230,12 @@ async def open_requests(agent_id: str | None = None):
 # ---------- Клиенты ----------
 
 async def clients(agent_id: str | None = None):
+    """Клиенты с текущим долгом и возрастом самого старого долга."""
+    sql = """select c.*, coalesce(d.debt, 0) as debt, coalesce(d.oldest_days, 0) as oldest_days
+               from clients c left join v_client_debts d on d.client_id = c.id"""
     if agent_id:
-        return await fetch("select * from clients where agent_id = $1 order by name", agent_id)
-    return await fetch("select * from clients order by name")
+        return await fetch(sql + " where c.agent_id = $1 order by c.name", agent_id)
+    return await fetch(sql + " order by c.name")
 
 
 async def add_client(data: dict):
@@ -238,3 +253,102 @@ async def transfer_clients(from_id: str, to_id: str, by: str, block: bool) -> in
 
 async def journal(limit: int = 50):
     return await fetch("select * from v_movements order by id desc limit $1", limit)
+
+
+# ---------- Продажи (этап 2) ----------
+
+async def create_sale(agent_id: str, client_id: str, items: list[dict], pay: str, paid: float):
+    return await rpc("create_sale", {"p_agent": agent_id, "p_client": client_id, "p_items": items,
+                                     "p_pay": pay, "p_paid": paid})
+
+
+async def decide_sale(sale_id: str, user_id: str, approve: bool):
+    return await rpc("decide_sale", {"p_sale": sale_id, "p_user": user_id, "p_approve": approve})
+
+
+async def get_sale(sale_id: str):
+    """Продажа с клиентом, агентом и строками — для накладной и уведомлений."""
+    try:
+        uuid.UUID(str(sale_id))
+    except ValueError:
+        return None
+    s = await fetchrow("""select s.*, c.name as client_name, c.place as client_place, c.phone as client_phone,
+                                 u.full_name as agent_name
+                            from sales s join clients c on c.id = s.client_id join users u on u.id = s.agent_id
+                           where s.id = $1""", sale_id)
+    if not s:
+        return None
+    s["items"] = await fetch("""select si.qty, si.price, si.discount_pct, si.amount, p.name, p.unit,
+                                       coalesce(g.max_discount, 0) as max_discount
+                                  from sale_items si join products p on p.id = si.product_id
+                                  left join product_groups g on g.id = p.group_id
+                                 where si.sale_id = $1 order by p.name""", sale_id)
+    s["debt_after"] = await fetchval("select coalesce(sum(remaining), 0) from debts where client_id = $1",
+                                     s["client_id"])
+    return s
+
+
+async def pending_sales():
+    ids = await fetch("select id from sales where status = 'pending' order by created_at")
+    return [await get_sale(r["id"]) for r in ids]
+
+
+async def take_payment(user_id: str, client_id: str, amount: float, method: str):
+    return await rpc("take_payment", {"p_user": user_id, "p_client": client_id, "p_amount": amount,
+                                      "p_method": method})
+
+
+# ---------- Деньги агентов ----------
+
+async def agent_cash(agent_id: str):
+    return await fetchrow("select * from v_agent_cash where agent_id = $1", agent_id)
+
+
+async def all_agent_cash():
+    return await fetch("select * from v_agent_cash order by full_name")
+
+
+async def create_handover(agent_id: str):
+    return await rpc("create_handover", {"p_agent": agent_id})
+
+
+async def decide_handover(hid: str, user_id: str, ok: bool):
+    return await rpc("decide_handover", {"p_id": hid, "p_user": user_id, "p_ok": ok})
+
+
+async def pending_handovers():
+    return await fetch("""select h.*, u.full_name as agent_name from handovers h
+                          join users u on u.id = h.agent_id where h.status = 'new' order by h.created_at""")
+
+
+# ---------- Сводка и настройки ----------
+
+async def owner_summary():
+    return await fetchval("select owner_summary()")
+
+
+SETTING_KEYS = ("agent_stock_limit", "client_debt_limit", "debt_stop_days")
+
+
+async def get_settings():
+    rows = await fetch("select key, value from settings where key = any($1::text[])", list(SETTING_KEYS))
+    groups = await fetch("select id, name, max_discount from product_groups order by name")
+    return {"settings": {r["key"]: r["value"] for r in rows}, "groups": groups}
+
+
+async def save_settings(values: dict, groups: dict, by: str):
+    for k, v in values.items():
+        if k in SETTING_KEYS:
+            await fetch("update settings set value = $2 where key = $1", k, max(0, float(v)))
+    for gid, pct in groups.items():
+        await fetch("update product_groups set max_discount = $2 where id = $1", gid, min(100, max(0, float(pct))))
+    await fetch("insert into audit_log(user_id, action, details) values ($1, 'settings_changed', $2)",
+                by, {"settings": values, "groups": groups})
+
+
+async def client_by_id(cid: str):
+    try:
+        uuid.UUID(str(cid))
+    except ValueError:
+        return None
+    return await fetchrow("select * from clients where id = $1", cid)

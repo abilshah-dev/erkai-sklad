@@ -16,15 +16,19 @@ log = logging.getLogger(__name__)
 B_ORDER, B_CAR, B_RETURN = "🛒 Заявка на склад", "🚚 Моя машина", "↩️ Вернуть остатки"
 B_NEW = "📥 Новые заявки"
 B_JOURNAL, B_AGENTS, B_INVITE = "📒 Журнал движений", "🚚 Товар у агентов", "➕ Пригласить сотрудника"
+B_MONEY, B_SUMMARY, B_CASHDESK = "💰 Мои деньги", "📊 Сводка", "💵 Касса"
+ALL_BUTTONS = (B_ORDER, B_CAR, B_RETURN, B_NEW, B_JOURNAL, B_AGENTS, B_INVITE, B_MONEY, B_SUMMARY, B_CASHDESK)
 
 
 def menu(role: str) -> ReplyKeyboardMarkup:
     if role == "agent":
-        rows = [[B_ORDER], [B_CAR, B_RETURN]]
+        rows = [[B_ORDER, B_MONEY], [B_CAR, B_RETURN]]
     elif role == "storekeeper":
         rows = [[B_NEW]]
-    else:  # owner, accountant
-        rows = [[B_JOURNAL, B_AGENTS], [B_NEW, B_INVITE]]
+    elif role == "accountant":
+        rows = [[B_CASHDESK, B_SUMMARY], [B_JOURNAL, B_AGENTS], [B_NEW, B_INVITE]]
+    else:  # owner
+        rows = [[B_SUMMARY, B_CASHDESK], [B_JOURNAL, B_AGENTS], [B_NEW, B_INVITE]]
     return ReplyKeyboardMarkup([[KeyboardButton(t) for t in r] for r in rows], resize_keyboard=True)
 
 
@@ -82,7 +86,7 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
 
     # Ожидаем имя нового сотрудника (шаг приглашения)
-    if ctx.user_data.get("invite_role") and text not in (B_JOURNAL, B_AGENTS, B_NEW, B_INVITE):
+    if ctx.user_data.get("invite_role") and text not in ALL_BUTTONS:
         role = ctx.user_data.pop("invite_role")
         code = await db.create_invite(role, text, u["id"])
         link = f"https://t.me/{ctx.bot.username}?start={code}"
@@ -106,6 +110,12 @@ async def on_text(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await show_agents(update)
         elif text == B_INVITE and u["role"] in ("owner", "accountant"):
             await ask_invite_role(update, u)
+        elif text == B_MONEY and u["role"] == "agent":
+            await show_money(update, u)
+        elif text == B_SUMMARY and u["role"] in ("owner", "accountant"):
+            await update.message.reply_text(await notify.summary_text(), reply_markup=open_button("Открыть сводку", "summary"))
+        elif text == B_CASHDESK and u["role"] in ("owner", "accountant"):
+            await show_cashdesk(update)
         else:
             await update.message.reply_text("Выберите действие в меню.", reply_markup=menu(u["role"]))
     except db.DbError as e:
@@ -170,6 +180,35 @@ async def show_agents(update: Update):
                                     reply_markup=open_button("👥 База клиентов", "clients"))
 
 
+async def show_money(update: Update, u: dict):
+    cash = await db.agent_cash(u["id"]) or {"cash_on_hand": 0, "pending_handover": 0}
+    clients = [c for c in await db.clients(u["id"]) if float(c["debt"]) > 0]
+    lines = [f"💰 Наличные на руках: {db.money(cash['cash_on_hand'])}"]
+    if float(cash["pending_handover"]):
+        lines.append(f"⏳ Сдано, ждёт бухгалтера: {db.money(cash['pending_handover'])}")
+    if clients:
+        lines.append("\nДолги ваших клиентов:")
+        for c in sorted(clients, key=lambda c: -c["oldest_days"]):
+            mark = " ⛔" if c["oldest_days"] > float(await db.setting("debt_stop_days", 30) or 0) else ""
+            lines.append(f"• {c['name']} — {db.money(c['debt'])}, {c['oldest_days']} дн.{mark}")
+    rows = [[InlineKeyboardButton("💸 Сдать наличные в кассу", callback_data="ho:new")]] if float(cash["cash_on_hand"]) else []
+    rows.append([InlineKeyboardButton("🧾 Продажа", web_app=WebAppInfo(f"{config.WEBAPP_URL}?view=sale")),
+                 InlineKeyboardButton("👥 Клиенты", web_app=WebAppInfo(f"{config.WEBAPP_URL}?view=clients"))])
+    await update.message.reply_text("\n".join(lines), reply_markup=InlineKeyboardMarkup(rows))
+
+
+async def show_cashdesk(update: Update):
+    pend = await db.pending_handovers()
+    cash = await db.all_agent_cash()
+    lines = ["💵 Наличные у агентов:"] + [f"• {a['full_name']} — {db.money(a['cash_on_hand'])}" for a in cash if a["active"]]
+    await update.message.reply_text("\n".join(lines) if len(lines) > 1 else "Агентов нет.")
+    for h in pend:
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("✅ Деньги получены", callback_data=f"ho:ok:{h['id']}")],
+                                   [InlineKeyboardButton("❌ Не получены", callback_data=f"ho:no:{h['id']}")]])
+        await update.message.reply_text(f"💰 {h['agent_name']} сдаёт {db.money(h['amount'])} (сдача №{h['no']})",
+                                        reply_markup=kb)
+
+
 async def ask_invite_role(update: Update, u: dict):
     roles = [("agent", "Торговый агент"), ("storekeeper", "Складовщик")]
     if u["role"] == "owner":
@@ -202,6 +241,23 @@ async def on_callback(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await q.edit_message_text(f"Возврат {res['no']} создан.")
             await q.answer()
             await notify.new_request(ctx.bot, res["id"])
+        elif kind == "sale" and u["role"] == "owner":  # владелец: скидка
+            action, _, sid = arg.partition(":")
+            res = await db.decide_sale(sid, u["id"], action == "ok")
+            await q.edit_message_text(q.message.text + ("\n\n✅ Одобрено" if res["approved"] else "\n\n❌ Отклонено"))
+            await q.answer("Готово")
+            await notify.sale_decided(ctx.bot, res, u["full_name"])
+        elif kind == "ho" and arg == "new" and u["role"] == "agent":  # агент: сдать наличные
+            res = await db.create_handover(u["id"])
+            await q.edit_message_text(f"Сдача №{res['no']}: {db.money(res['amount'])}. Ждём подтверждения бухгалтера.")
+            await q.answer()
+            await notify.handover_new(ctx.bot, res, u["full_name"])
+        elif kind == "ho" and u["role"] in ("owner", "accountant"):  # бухгалтер: получил деньги
+            action, _, hid = arg.partition(":")
+            res = await db.decide_handover(hid, u["id"], action == "ok")
+            await q.edit_message_text(q.message.text + ("\n\n✅ Получено" if res["ok"] else "\n\n❌ Не получено"))
+            await q.answer("Готово")
+            await notify.handover_decided(ctx.bot, res, u["full_name"])
         elif kind == "inv" and u["role"] in ("owner", "accountant"):
             ctx.user_data["invite_role"] = arg
             await q.edit_message_text(f"{db.ROLE_NAMES[arg]}: напишите имя и фамилию сотрудника.")

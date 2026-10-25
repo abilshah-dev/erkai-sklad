@@ -20,6 +20,7 @@ create role $DB login password '$PASS';
 create database $DB owner $DB;
 SQL
 PGPASSWORD=$PASS psql -h 127.0.0.1 -U "$DB" -d "$DB" -v ON_ERROR_STOP=1 -q -f "$APP/db/schema.sql"
+(cd "$APP" && DATABASE_URL="postgresql://$DB:$PASS@127.0.0.1:5432/$DB" BOT_TOKEN=0:x WEBAPP_URL=https://x/ ENV_FILE=/none "$APP/.venv/bin/python" -m tools.migrate)
 
 echo "== Настройки $DIR/.env"
 mkdir -p "$DIR"
