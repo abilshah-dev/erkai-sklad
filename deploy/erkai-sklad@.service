@@ -1,0 +1,16 @@
+# Один шаблон службы на всех клиентов. %i = имя клиента (папка /opt/erkai-sklad/clients/<имя>).
+# Включить клиента:  systemctl enable --now erkai-sklad@client1
+# Логи:              journalctl -u erkai-sklad@client1 -n 50 --no-pager
+[Unit]
+Description=ERKai Sklad bot (%i)
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/erkai-sklad/app
+EnvironmentFile=/opt/erkai-sklad/clients/%i/.env
+ExecStart=/opt/erkai-sklad/app/.venv/bin/python -m app.main
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

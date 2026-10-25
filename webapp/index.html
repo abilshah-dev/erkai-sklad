@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Склад</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Rubik:wght@400;500;600&display=swap">
+<style>
+:root{
+  --bg:#F3F1EC; --surface:#FBFAF7; --surface2:#ECEAE5; --line:#DEDAD2;
+  --fg:#1E2226; --muted:#5F656C; --accent:#E07B2E; --accent-ink:#1E2226; --accent-soft:#FCEFE3; --accent-text:#A84B12;
+  --ok:#2F7D4F; --ok-soft:#E3F1E8; --warn:#9A6200; --warn-soft:#FBF0D9; --bad:#B23A2A; --bad-soft:#F8E3DF;
+  --font:'Rubik','Segoe UI',Roboto,Arial,sans-serif; color-scheme:light;
+}
+:root.dark{
+  --bg:#121417; --surface:#1E2226; --surface2:#262B30; --line:#343A40;
+  --fg:#EEF0F2; --muted:#A3AAB1; --accent:#F0954A; --accent-soft:#3A2A1C; --accent-text:#F4A766;
+  --ok:#6BC28E; --ok-soft:#1D3327; --warn:#E5B04E; --warn-soft:#382D16; --bad:#F08A7A; --bad-soft:#3A201C; color-scheme:dark;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.4 var(--font)}
+button{font:inherit;color:inherit;cursor:pointer}
+input,select{font:inherit;color:var(--fg)}
+main{padding:14px 16px 110px;display:flex;flex-direction:column;gap:12px;max-width:560px;margin:0 auto}
+h2{font-size:18px;margin:2px 0 0;font-weight:600}
+.sub{color:var(--muted);font-size:13px;margin:-6px 0 0}
+.tabs{position:sticky;top:0;z-index:5;display:flex;gap:6px;overflow-x:auto;padding:10px 16px;background:var(--bg);border-bottom:1px solid var(--line);scrollbar-width:none}
+.tabs button{flex:none;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:7px 14px;font-size:14px;font-weight:500}
+.tabs button[aria-pressed="true"]{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:flex;flex-direction:column;gap:8px}
+.row{display:flex;align-items:center;gap:10px;justify-content:space-between;min-width:0}
+.grow{flex:1;min-width:0}
+.name{font-weight:500}
+.meta{font-size:13px;color:var(--muted)}
+.num{font-variant-numeric:tabular-nums;white-space:nowrap}
+.search{display:flex;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:0 12px}
+.search input{border:0;background:none;padding:11px 0;flex:1;min-width:0;outline:none}
+.chips{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none}
+.chips button{flex:none;border:1px solid var(--line);background:var(--surface);border-radius:999px;padding:6px 12px;font-size:13px}
+.chips button[aria-pressed="true"]{background:var(--accent-soft);border-color:var(--accent);color:var(--accent-text)}
+.list{display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden}
+.item{display:flex;align-items:center;gap:10px;padding:11px 14px;border-top:1px solid var(--line)}
+.item:first-child{border-top:0}
+.step{display:flex;align-items:center;background:var(--surface2);border:1px solid var(--line);border-radius:10px;flex:none}
+.step button{border:0;background:none;width:34px;height:34px;font-size:18px}
+.step input{width:46px;border:0;background:none;text-align:center;font-weight:600;font-variant-numeric:tabular-nums}
+.add{border:1px solid var(--line);background:var(--surface2);border-radius:10px;padding:7px 14px;font-weight:500;flex:none}
+.btn{border:0;border-radius:12px;padding:12px 16px;font-weight:600;background:var(--accent);color:var(--accent-ink);width:100%}
+.btn.sec{background:var(--surface2);color:var(--fg);border:1px solid var(--line)}
+.btn:disabled{opacity:.45}
+.bar{position:fixed;left:0;right:0;bottom:0;padding:10px 16px calc(12px + env(safe-area-inset-bottom,0px));background:linear-gradient(to top,var(--bg) 75%,transparent);display:flex;flex-direction:column;gap:6px;max-width:560px;margin:0 auto}
+.pill{display:inline-flex;font-size:12px;font-weight:600;border-radius:999px;padding:2px 9px;white-space:nowrap}
+.p-ok{background:var(--ok-soft);color:var(--ok)} .p-acc{background:var(--accent-soft);color:var(--accent-text)} .p-mut{background:var(--surface2);color:var(--muted)}
+.tiles{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.tile{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px}
+.tile b{display:block;font-size:20px;font-weight:600;font-variant-numeric:tabular-nums}
+.tile span{font-size:12px;color:var(--muted)}
+.meter{height:8px;background:var(--surface2);border-radius:99px;overflow:hidden}
+.meter i{display:block;height:100%;background:var(--accent)}
+.note{font-size:13px;border-radius:12px;padding:10px 12px;background:var(--accent-soft)}
+.note.bad{background:var(--bad-soft)}
+.field{display:flex;flex-direction:column;gap:4px}
+.field label{font-size:12px;color:var(--muted);font-weight:500}
+.field input,.field select{border:1px solid var(--line);background:var(--surface);border-radius:10px;padding:10px 12px;width:100%}
+.two{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.empty{color:var(--muted);text-align:center;padding:24px 10px}
+.toast{position:fixed;left:50%;bottom:90px;transform:translateX(-50%);background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:12px;max-width:calc(100% - 32px);z-index:20}
+table{width:100%;border-collapse:collapse;font-size:13px}
+td{padding:7px 4px;border-top:1px solid var(--line);vertical-align:top}
+</style>
+</head>
+<body>
+<div class="tabs" id="tabs"></div>
+<main id="main"><div class="empty">Загрузка…</div></main>
+<div id="bar"></div>
+<div class="toast" id="toast" hidden></div>
+
+<script>
+// ---------- Связь с Telegram и сервером ----------
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); if (tg.colorScheme === 'dark') document.documentElement.classList.add('dark'); }
+const params = new URLSearchParams(location.search);
+
+async function api(path, body) {
+  const opts = { headers: { 'Content-Type': 'application/json', 'X-Init-Data': tg ? tg.initData : '' } };
+  if (body !== undefined) { opts.method = 'POST'; opts.body = JSON.stringify(body); }
+  const r = await fetch('api/' + path, opts);
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error || ('Ошибка ' + r.status));
+  return j;
+}
+const fmt = n => Math.round(+n || 0).toLocaleString('ru-RU') + ' с';
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let toastT;
+function toast(m) { const t = document.getElementById('toast'); t.textContent = m; t.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => t.hidden = true, 2800); }
+function haptic(type) { try { tg && tg.HapticFeedback.notificationOccurred(type); } catch (_) {} }
+
+// ---------- Состояние ----------
+const S = { me: null, view: null, catalog: [], cart: {}, cat: 'Все', q: '', data: null, busy: false };
+const TABS = {
+  agent: [['order', '🛒 Заявка'], ['car', '🚚 Машина'], ['clients', '👥 Клиенты']],
+  storekeeper: [['requests', '📥 Заявки'], ['stock', '📦 Остатки'], ['journal', '📒 Журнал']],
+  accountant: [['clients', '👥 Клиенты'], ['agents', '🚚 Агенты'], ['requests', '📥 Заявки'], ['journal', '📒 Журнал']],
+  owner: [['agents', '🚚 Агенты'], ['clients', '👥 Клиенты'], ['requests', '📥 Заявки'], ['journal', '📒 Журнал']]
+};
+const main = document.getElementById('main'), bar = document.getElementById('bar');
+
+async function go(view) {
+  S.view = view; S.data = null; bar.innerHTML = '';
+  document.getElementById('tabs').innerHTML = TABS[S.me.role].map(([k, l]) =>
+    `<button data-go="${k}" aria-pressed="${(view === k) || (view === 'confirm' && k === 'requests')}">${l}</button>`).join('');
+  main.innerHTML = '<div class="empty">Загрузка…</div>';
+  try { await LOAD[view](); render(); } catch (e) { main.innerHTML = `<div class="note bad">${esc(e.message)}</div>`; }
+}
+function render() { main.innerHTML = VIEW[S.view](); if (BAR[S.view]) bar.innerHTML = BAR[S.view](); else bar.innerHTML = ''; }
+
+// ---------- Загрузка данных по экранам ----------
+const LOAD = {
+  order: async () => { S.catalog = await api('catalog'); S.data = await api('car'); },
+  car: async () => { S.data = await api('car'); S.ret = {}; },
+  clients: async () => { S.data = { clients: await api('clients'), agents: S.me.role === 'agent' ? [] : await api('agents') }; },
+  requests: async () => { S.data = await api('requests'); },
+  confirm: async () => { S.data = await api('requests/' + params.get('id')); S.edit = {}; },
+  stock: async () => { S.catalog = await api('catalog'); },
+  agents: async () => { S.data = await api('agents'); },
+  journal: async () => { S.data = await api('journal'); }
+};
+
+function stepper(kind, id, v, max) {
+  return `<div class="step"><button data-dec="${kind}" data-id="${id}" aria-label="Меньше">−</button><input inputmode="numeric" data-in="${kind}" data-id="${id}" value="${v}" aria-label="Количество"><button data-inc="${kind}" data-id="${id}" data-max="${max}" aria-label="Больше">+</button></div>`;
+}
+const carValue = () => (S.data && S.data.items || []).reduce((s, r) => s + (+r.value), 0);
+const cartSum = () => Object.entries(S.cart).reduce((s, [id, q]) => s + (S.catalog.find(p => p.id === id)?.price || 0) * q, 0);
+
+// ---------- Экраны ----------
+const VIEW = {
+  order() {
+    const groups = ['Все', ...new Set(S.catalog.map(p => p.group_name || 'Без группы'))];
+    const q = S.q.trim().toLowerCase();
+    const items = S.catalog.filter(p => (S.cat === 'Все' || (p.group_name || 'Без группы') === S.cat) && (!q || p.name.toLowerCase().includes(q)));
+    return `<h2>Заявка на склад</h2><p class="sub">Берите под заказы и про запас — выданное числится за вами.</p>
+    <div class="search"><input id="q" type="search" placeholder="Поиск товара" value="${esc(S.q)}"></div>
+    <div class="chips">${groups.map(g => `<button data-cat="${esc(g)}" aria-pressed="${S.cat === g}">${esc(g)}</button>`).join('')}</div>
+    <div class="list">${items.map(p => { const v = S.cart[p.id] || 0; return `<div class="item"><div class="grow"><div class="name">${esc(p.name)}</div><div class="meta">на складе: <span class="num">${p.stock} ${esc(p.unit)}</span> · ${fmt(p.price)}</div></div>${v ? stepper('cart', p.id, v, p.stock) : `<button class="add" data-add="${p.id}" ${p.stock > 0 ? '' : 'disabled'}>+ Добавить</button>`}</div>`; }).join('') || '<div class="empty">Ничего не найдено</div>'}</div>`;
+  },
+  car() {
+    const items = S.data.items, limit = +S.me.agent_limit || 0, val = carValue();
+    return `<h2>Моя машина</h2>
+    <div class="tiles"><div class="tile"><b>${fmt(val)}</b><span>товара на руках</span></div><div class="tile"><b>${items.length}</b><span>позиций</span></div></div>
+    ${limit ? `<div class="card"><div class="row"><span class="meta">Лимит подотчёта</span><span class="meta num">${fmt(val)} из ${fmt(limit)}</span></div><div class="meter"><i style="width:${Math.min(100, val / limit * 100)}%"></i></div></div>` : ''}
+    ${S.data.pending.map(p => `<div class="note">${p.kind === 'issue' ? 'Заявка' : 'Возврат'} ${esc(p.no)} ждёт склада.</div>`).join('')}
+    <p class="sub" style="margin:0">Чтобы вернуть часть товара, укажите количество и нажмите «Вернуть».</p>
+    <div class="list">${items.map(r => { const v = S.ret[r.product_id] || 0; return `<div class="item"><div class="grow"><div class="name">${esc(r.product)}</div><div class="meta">в машине: <b class="num">${r.qty} ${esc(r.unit)}</b> · ${fmt(r.value)}</div></div>${v ? stepper('ret', r.product_id, v, r.qty) : `<button class="add" data-retadd="${r.product_id}">Вернуть</button>`}</div>`; }).join('') || '<div class="empty">В машине пусто</div>'}</div>`;
+  },
+  clients() {
+    const list = S.data.clients, agents = S.data.agents, staff = S.me.role !== 'agent';
+    const aName = id => (agents.find(a => a.id === id) || {}).full_name || '—';
+    const active = agents.filter(a => a.active);
+    return `<h2>${staff ? 'База клиентов' : 'Мои клиенты'}</h2><p class="sub">Клиенты принадлежат компании и видны бухгалтеру.</p>
+    ${staff && agents.length > 1 ? `<div class="card"><div class="name">Передать клиентов другому агенту</div>
+      <div class="two"><div class="field"><label for="xf">От кого</label><select id="xf">${agents.map(a => `<option value="${a.id}">${esc(a.full_name)}${a.active ? '' : ' (отключён)'}</option>`).join('')}</select></div>
+      <div class="field"><label for="xt">Кому</label><select id="xt">${active.map(a => `<option value="${a.id}">${esc(a.full_name)}</option>`).join('')}</select></div></div>
+      <label class="row" style="justify-content:flex-start;gap:8px;font-size:14px"><input type="checkbox" id="xb"> Отключить доступ агенту к боту</label>
+      <button class="btn sec" data-act="transfer">Передать клиентов</button></div>` : ''}
+    <div class="card"><div class="name">Новый клиент</div>
+      <div class="field"><label for="cn">Название</label><input id="cn" placeholder="Магазин «Строй-Дом»"></div>
+      <div class="two"><div class="field"><label for="cp">Где</label><input id="cp" placeholder="рынок, ряд"></div><div class="field"><label for="ct">Телефон</label><input id="ct" inputmode="tel" placeholder="+996"></div></div>
+      ${staff ? `<div class="field"><label for="ca">Агент</label><select id="ca">${active.map(a => `<option value="${a.id}">${esc(a.full_name)}</option>`).join('')}</select></div>` : ''}
+      <button class="btn sec" data-act="addClient">Добавить клиента</button></div>
+    <div class="list">${list.map(c => `<div class="item"><div class="grow"><div class="name">${esc(c.name)}</div><div class="meta">${esc([c.place, c.phone].filter(Boolean).join(' · '))}</div>${staff ? `<div class="meta">агент: ${esc(aName(c.agent_id))}</div>` : ''}</div></div>`).join('') || '<div class="empty">Клиентов пока нет</div>'}</div>`;
+  },
+  requests() {
+    return `<h2>Заявки к обработке</h2>${S.data.map(r => `<div class="card"><div class="row"><div class="grow"><div class="name">${r.kind === 'issue' ? 'Выдача' : 'Возврат'} ${esc(r.no)}</div><div class="meta">${esc(r.agent_name)} · ${r.request_items.length} поз.</div></div><span class="pill ${r.kind === 'issue' ? 'p-acc' : 'p-mut'}">${r.kind === 'issue' ? 'выдать' : 'принять'}</span></div><button class="btn sec" data-open="${r.id}">Открыть</button></div>`).join('') || '<div class="empty">Новых заявок нет</div>'}`;
+  },
+  confirm() {
+    const r = S.data;
+    if (r.status !== 'new') return `<h2>${esc(r.no)}</h2><div class="note">Заявка уже ${r.status === 'done' ? 'обработана' : 'отменена'}.</div>`;
+    return `<h2>${r.kind === 'issue' ? 'Выдача' : 'Возврат'} ${esc(r.no)}</h2><p class="sub">Агент: ${esc(r.agent_name)}. Укажите фактическое количество.</p>
+    <div class="list">${r.request_items.map(it => { const v = S.edit[it.id] ?? it.qty_requested; return `<div class="item"><div class="grow"><div class="name">${esc(it.products.name)}</div><div class="meta">запрошено ${it.qty_requested} ${esc(it.products.unit)}</div></div>${stepper('giv', it.id, v, 999999)}</div>`; }).join('')}</div>`;
+  },
+  stock() {
+    return `<h2>Остатки основного склада</h2><div class="list">${S.catalog.map(p => `<div class="item"><div class="grow"><div class="name">${esc(p.name)}</div><div class="meta">${esc(p.group_name || '')}</div></div><b class="num">${p.stock} ${esc(p.unit)}</b></div>`).join('')}</div>`;
+  },
+  agents() {
+    const total = S.data.reduce((s, a) => s + a.car_value, 0);
+    return `<h2>Товар у агентов</h2><div class="tiles"><div class="tile"><b>${fmt(total)}</b><span>всего на руках</span></div><div class="tile"><b>${S.data.filter(a => a.active).length}</b><span>активных агентов</span></div></div>
+    <div class="list">${S.data.map(a => `<div class="item"><div class="grow"><div class="name">${esc(a.full_name)}</div>${a.active ? '' : '<span class="pill p-mut">отключён</span>'}</div><b class="num">${fmt(a.car_value)}</b></div>`).join('') || '<div class="empty">Агентов нет</div>'}</div>`;
+  },
+  journal() {
+    return `<h2>Журнал движений</h2><p class="sub">Каждое перемещение товара — с временем и автором.</p>
+    <div class="card"><table>${S.data.map(m => `<tr><td class="meta num">${new Date(m.ts).toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</td><td>${esc(m.doc_no)} · ${esc(m.product)} <b class="num">${m.qty} ${esc(m.unit)}</b><div class="meta">${esc(m.from_name || '1С')} → ${esc(m.to_name || 'списание')}${m.user_name ? ' · ' + esc(m.user_name) : ''}</div></td></tr>`).join('') || '<tr><td class="empty">Движений пока нет</td></tr>'}</table></div>`;
+  }
+};
+
+const BAR = {
+  order() {
+    const n = Object.keys(S.cart).length; if (!n) return '';
+    const limit = +S.me.agent_limit || 0, over = limit && carValue() + cartSum() > limit;
+    return `<div class="bar">${over ? `<div class="note bad">Лимит подотчёта ${fmt(limit)}: в машине уже ${fmt(carValue())}.</div>` : ''}<button class="btn" data-act="sendOrder" ${over || S.busy ? 'disabled' : ''}>Отправить на склад · ${n} поз. · ${fmt(cartSum())}</button></div>`;
+  },
+  car() { const n = Object.keys(S.ret || {}).length; return n ? `<div class="bar"><button class="btn" data-act="sendReturn" ${S.busy ? 'disabled' : ''}>Вернуть на склад · ${n} поз.</button></div>` : ''; },
+  confirm() { return S.data.status === 'new' ? `<div class="bar"><button class="btn" data-act="confirm" ${S.busy ? 'disabled' : ''}>${S.data.kind === 'issue' ? 'Выдал' : 'Принял'} — подтвердить</button></div>` : ''; }
+};
+
+// ---------- Действия ----------
+const ACT = {
+  async sendOrder() {
+    const items = Object.entries(S.cart).map(([product_id, qty]) => ({ product_id, qty }));
+    const res = await api('requests', { kind: 'issue', items });
+    S.cart = {}; haptic('success'); toast(`Заявка ${res.no} отправлена складовщику`); await go('car');
+  },
+  async sendReturn() {
+    const items = Object.entries(S.ret).map(([product_id, qty]) => ({ product_id, qty }));
+    const res = await api('requests', { kind: 'return', items });
+    haptic('success'); toast(`Возврат ${res.no} отправлен складовщику`); await go('car');
+  },
+  async confirm() {
+    const items = Object.entries(S.edit).map(([item_id, qty_actual]) => ({ item_id, qty_actual }));
+    const res = await api(`requests/${S.data.id}/confirm`, { items });
+    haptic('success'); toast(`${res.no} подтверждена`);
+    if (params.get('view') === 'confirm' && tg) setTimeout(() => tg.close(), 900); else await go('requests');
+  },
+  async addClient() {
+    const v = id => (document.getElementById(id) || {}).value || '';
+    if (!v('cn').trim()) { toast('Укажите название клиента'); return; }
+    await api('clients', { name: v('cn'), place: v('cp'), phone: v('ct'), agent_id: v('ca') || undefined });
+    toast('Клиент добавлен'); await go('clients');
+  },
+  async transfer() {
+    const from = document.getElementById('xf').value, to = document.getElementById('xt').value, block = document.getElementById('xb').checked;
+    if (from === to) { toast('Выберите разных агентов'); return; }
+    const res = await api('clients/transfer', { from, to, block });
+    haptic('success'); toast(`Передано клиентов: ${res.moved}`); await go('clients');
+  }
+};
+
+document.addEventListener('click', async e => {
+  const t = e.target.closest('button'); if (!t || t.disabled) return;
+  const d = t.dataset;
+  if (d.go) return go(d.go);
+  if (d.open) { params.set('id', d.open); return go('confirm'); }
+  if (d.cat) { S.cat = d.cat; return render(); }
+  if (d.add) { S.cart[d.add] = 1; return render(); }
+  if (d.retadd) { S.ret[d.retadd] = 1; return render(); }
+  if (d.inc || d.dec) {
+    const store = { cart: S.cart, ret: S.ret, giv: S.edit }[d.inc || d.dec];
+    const cur = store[d.id] ?? (S.data.request_items || []).find(i => i.id === d.id)?.qty_requested ?? 0;
+    let v = d.inc ? Math.min(+d.max, cur + 1) : cur - 1;
+    if (v <= 0 && d.dec !== 'giv') delete store[d.id]; else store[d.id] = Math.max(0, v);
+    return render();
+  }
+  if (d.act && ACT[d.act]) {
+    S.busy = true; render();
+    try { await ACT[d.act](); } catch (err) { haptic('error'); toast(err.message); } finally { S.busy = false; if (BAR[S.view]) bar.innerHTML = BAR[S.view](); }
+  }
+});
+document.addEventListener('change', e => {
+  const t = e.target, k = t.dataset.in; if (!k) return;
+  const store = { cart: S.cart, ret: S.ret, giv: S.edit }[k];
+  const n = Math.max(0, Math.round(+t.value || 0));
+  if (n <= 0 && k !== 'giv') delete store[t.dataset.id]; else store[t.dataset.id] = n;
+  render();
+});
+document.addEventListener('input', e => {
+  if (e.target.id !== 'q') return;
+  S.q = e.target.value; const pos = e.target.selectionStart; render();
+  const q = document.getElementById('q'); q.focus(); try { q.setSelectionRange(pos, pos); } catch (_) {}
+});
+
+// ---------- Старт ----------
+(async () => {
+  try {
+    S.me = await api('me');
+    document.title = S.me.company;
+    const allowed = TABS[S.me.role].map(t => t[0]).concat(S.me.role !== 'agent' ? ['confirm'] : []);
+    const want = params.get('view');
+    await go(allowed.includes(want) ? want : TABS[S.me.role][0][0]);
+  } catch (e) {
+    main.innerHTML = `<div class="note bad">${esc(e.message)}</div>`;
+  }
+})();
+</script>
+</body>
+</html>
